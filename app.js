@@ -1222,12 +1222,25 @@ async function loadCatalog() {
 }
 
 async function loadPurchases() {
+  try {
+    const yesterday = new Date();
+    yesterday.setHours(0,0,0,0);
+    await sb.from('investment_purchases')
+      .delete()
+      .in('payment_status', ['pending', 'failed'])
+      .lt('created_at', yesterday.toISOString());
+  } catch(e) {
+    console.warn('Auto cleanup failed', e);
+  }
+
   const { data, error } = await sb
     .from('investment_purchases')
     .select('*, investors(name, phone), investment_batch_catalog(batch_name, price_per_lot, active_month)')
     .order('created_at', { ascending: false })
     .limit(100);
-  if (!error) state.purchases = data || [];
+  if (!error) {
+    state.purchases = data || [];
+  }
 }
 
 function renderLotManagement() {
@@ -1262,7 +1275,9 @@ function renderLotManagement() {
         ${canApprove ? `
           <button class="btn sm success" onclick="approvePurchase('${p.id}', '${p.investor_id}', '${p.catalog_id}', ${p.lots}, ${p.amount})"><i class="fas fa-check"></i> Setuju</button>
           <button class="btn sm err" onclick="rejectPurchase('${p.id}')"><i class="fas fa-times"></i></button>
-        ` : '<span style="color:var(--text-muted);font-size:0.8rem">-</span>'}
+        ` : `
+          <button class="btn sm err" onclick="deletePurchase('${p.id}')" title="Hapus"><i class="fas fa-trash"></i></button>
+        `}
       </td>
     </tr>`;
   }).join('');
@@ -1276,11 +1291,11 @@ function renderLotManagement() {
         <div style="font-size:0.85rem;margin-top:4px;">Investor sudah bayar, silakan review dan setujui di tabel bawah.</div>
       </div>` : ''}
 
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-        <h3 style="margin:0;font-size:1rem;"><i class="fas fa-tag"></i> Katalog Batch</h3>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+        <h3 style="margin:0;"><i class="fas fa-list-ul"></i> Katalog Batch Aktif</h3>
         <button class="btn primary sm" onclick="openCatalogForm()"><i class="fas fa-plus"></i> Tambah Batch</button>
       </div>
-      <div style="overflow-x:auto;">
+      <div class="card" style="overflow-x:auto;">
       <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
         <thead><tr style="background:var(--bg-body); border-bottom: 2px solid var(--border);">
           <th style="padding:12px 8px;text-align:left;">Batch</th>
@@ -1292,11 +1307,12 @@ function renderLotManagement() {
         <tbody>${catalogRows || '<tr><td colspan="5" style="text-align:center;padding:16px;color:var(--text-muted);">Belum ada katalog</td></tr>'}</tbody>
       </table></div>
 
-      <div style="display:flex;justify-content:space-between;align-items:center;margin:20px 0 10px;">
-        <h3 style="margin:0;font-size:1rem;"><i class="fas fa-receipt"></i> Riwayat Pembelian Investor</h3>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin:2rem 0 1rem 0;">
+        <h3 style="margin:0;"><i class="fas fa-receipt"></i> Riwayat Pembelian Investor</h3>
+        <button class="btn sm err" onclick="deleteAllPendingPurchases()"><i class="fas fa-trash-alt"></i> Bersihkan Semua Riwayat Gagal/Pending</button>
         <button class="btn sm" onclick="refreshLotMgmt()"><i class="fas fa-refresh"></i></button>
       </div>
-      <div style="overflow-x:auto;">
+      <div class="card" style="overflow-x:auto;">
       <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
         <thead><tr style="background:var(--bg-body); border-bottom: 2px solid var(--border);">
           <th style="padding:12px 8px;text-align:left;">Investor</th>
@@ -1482,20 +1498,46 @@ window.approvePurchase = async function(purchaseId, investorId, catalogId, lots,
   }
 };
 
-window.rejectPurchase = async function(purchaseId) {
+window.rejectPurchase = async function(id) {
   if (!confirm('Tolak pembelian ini?')) return;
   setBusy(true);
   try {
-    const { error } = await sb.from('investment_purchases').update({
-      approval_status: 'rejected',
-      approved_at: new Date().toISOString(),
-    }).eq('id', purchaseId);
+    const { error } = await sb.from('investment_purchases').update({ approval_status: 'rejected' }).eq('id', id);
     if (error) throw error;
-    toast('Pembelian ditolak.');
-    await loadPurchases();
-    render();
-  } catch (e) {
-    toast('Gagal tolak: ' + (e.message || e), true);
+    await refreshLotMgmt();
+    toast('Pembelian ditolak');
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    setBusy(false);
+  }
+};
+
+window.deletePurchase = async function(id) {
+  if (!confirm('Yakin ingin menghapus riwayat pembelian ini secara permanen?')) return;
+  setBusy(true);
+  try {
+    const { error } = await sb.from('investment_purchases').delete().eq('id', id);
+    if (error) throw error;
+    await refreshLotMgmt();
+    toast('Riwayat pembelian dihapus');
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    setBusy(false);
+  }
+};
+
+window.deleteAllPendingPurchases = async function() {
+  if (!confirm('Yakin ingin menghapus SEMUA riwayat pembelian yang berstatus PENDING atau FAILED secara permanen?')) return;
+  setBusy(true);
+  try {
+    const { error } = await sb.from('investment_purchases').delete().in('payment_status', ['pending', 'failed']);
+    if (error) throw error;
+    await refreshLotMgmt();
+    toast('Semua riwayat pending & gagal telah dibersihkan');
+  } catch (err) {
+    alert(err.message);
   } finally {
     setBusy(false);
   }
