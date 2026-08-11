@@ -44,8 +44,10 @@ const state = {
   batches: [],
   investorProducts: [],
   distributions: [],
-  batchStats: {}, // batchId -> {omzet, modal, netProfit, investorShare, ownerShare, txCount, needsReview}
-  statsRange: 3, // bulan mundur
+  batchStats: {},
+  statsRange: 3,
+  catalog: [],       // investment_batch_catalog
+  purchases: [],     // investment_purchases dengan detail
 };
 
 function toast(msg, err = false) {
@@ -107,7 +109,7 @@ window.attemptLogin = async function () {
     // If table doesn't exist or is completely empty, allow fallback
     if (listError || !allAdmins || allAdmins.length === 0) {
       if (username === 'admin' && pin === String(ADMIN_PIN)) {
-        sessionStorage.setItem(SESSION_KEY, JSON.stringify({ id: 'fallback', username: 'admin', pin: String(ADMIN_PIN), is_fallback: true }));
+        localStorage.setItem(SESSION_KEY, JSON.stringify({ id: 'fallback', username: 'admin', pin: String(ADMIN_PIN), is_fallback: true }));
         boot();
         return;
       } else {
@@ -128,7 +130,7 @@ window.attemptLogin = async function () {
     if (error) throw error;
     
     if (data) {
-      sessionStorage.setItem(SESSION_KEY, JSON.stringify(data));
+      localStorage.setItem(SESSION_KEY, JSON.stringify(data));
       boot();
     }
   } catch (e) {
@@ -139,7 +141,7 @@ window.attemptLogin = async function () {
   }
 };
 window.logoutAdmin = function () {
-  sessionStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(SESSION_KEY);
   renderPinScreen();
 };
 
@@ -197,7 +199,17 @@ function parseNoteLines(note) {
 async function computeAllBatchStats(monthsBack = 3) {
   const finalStats = {};
   state.batches.forEach(b => {
-    finalStats[b.id] = { omzet: 0, modal: 0, netProfit: 0, investorShare: 0, ownerShare: 0, txCount: 0, needsReview: 0, persen: 30, batchName: b.batch_name };
+    const bName = String(b.batch_name).trim().toLowerCase();
+    const assignedProj = (state.projects || []).find(p => String(p.name).trim().toLowerCase() === bName);
+    const projId = assignedProj ? assignedProj.id : null;
+    
+    const batchProduct = (state.investorProducts || []).find(p => 
+      p.investor_batch_id === b.id || 
+      (projId && p.investor_batch_id === projId)
+    );
+    const initPersen = batchProduct ? Number(batchProduct.persentase_keuntungan_investor || 30) : 30;
+
+    finalStats[b.id] = { omzet: 0, modal: 0, netProfit: 0, investorShare: 0, ownerShare: 0, txCount: 0, needsReview: 0, persen: initPersen, batchName: b.batch_name };
   });
   const productMap = new Map(state.investorProducts.map(p => [normName(p.nama_produk), p]));
   if (!productMap.size) { state.batchStats = finalStats; return; }
@@ -211,6 +223,19 @@ async function computeAllBatchStats(monthsBack = 3) {
     const txs = await fetchMonthTransactions(mk);
     for (const t of txs) {
       if (t.deleted) continue;
+      if (t.note && t.note.startsWith('[MANUAL_PROFIT]')) {
+        const match = t.note.match(/BATCH_ID=([a-zA-Z0-9-]+)\s+AMOUNT=([-0-9.]+)/);
+        if (match) {
+          const bId = match[1];
+          const pAmt = Number(match[2]);
+          if (finalStats[bId]) {
+            finalStats[bId].investorShare += pAmt;
+            finalStats[bId].netProfit += pAmt; // Count as net profit too
+            finalStats[bId].txCount += 1;
+          }
+        }
+        continue;
+      }
       const lines = parseNoteLines(t.note);
       if (!lines.length) continue;
       
@@ -223,15 +248,21 @@ async function computeAllBatchStats(monthsBack = 3) {
         const bId = prod.investor_batch_id;
         if (!bId) continue;
         
+        let pName = '';
         const assignedBatch = state.batches.find(x => x.id === bId);
-        if (!assignedBatch) continue;
-        
-        const pName = String(assignedBatch.batch_name).trim().toLowerCase();
+        if (assignedBatch) {
+          pName = String(assignedBatch.batch_name).trim().toLowerCase();
+        } else {
+          const assignedProj = state.projects.find(x => x.id === bId);
+          if (assignedProj) pName = String(assignedProj.name).trim().toLowerCase();
+          else continue;
+        }
         
         const txTime = new Date(t.created_at || t.createdAt || t.dateKey || 0).getTime();
         const eligibleBatches = activeBatches.filter(b => {
           if (String(b.batch_name).trim().toLowerCase() !== pName) return false;
-          const bTime = new Date(b.created_at || 0).getTime();
+          // Gunakan start_date (Bulan Aktif) jika ada, jika tidak fallback ke created_at
+          const bTime = new Date(b.start_date || b.created_at || 0).getTime();
           return bTime <= txTime;
         });
 
@@ -288,6 +319,7 @@ function tabBar() {
     ['projects', 'fa-briefcase', 'Master Proyek'],
     ['batches', 'fa-layer-group', 'Batch Inv'],
     ['distribution', 'fa-hand-holding-dollar', 'Pencairan'],
+    ['lotmgmt', 'fa-cart-shopping', 'Lot & Pembelian'],
     ['pengaturan', 'fa-cog', 'Pengaturan'],
   ];
   return `<nav class="tabs">${tabs.map(([p, icon, label]) => `
@@ -307,6 +339,10 @@ function header(title, sub) {
 window.go = function (page) {
   state.page = page;
   render();
+  // Auto-refresh data saat buka tab Lot & Pembelian
+  if (page === 'lotmgmt') {
+    Promise.all([loadCatalog(), loadPurchases()]).then(() => render());
+  }
 };
 
 function render() {
@@ -316,6 +352,7 @@ function render() {
   else if (state.page === 'projects') body = renderProjects();
   else if (state.page === 'batches') body = renderBatches();
   else if (state.page === 'distribution') body = renderDistribution();
+  else if (state.page === 'lotmgmt') body = renderLotManagement();
   $('app').innerHTML = body + tabBar();
 }
 
@@ -353,49 +390,131 @@ function renderDashboard() {
           ${[1,2,3,6,12].map(n => `<option value="${n}" ${state.statsRange===n?'selected':''}>${n} bulan</option>`).join('')}
         </select></div>
       </div>
-      <div class="tiny mb">Per Batch</div>
-      ${state.batches.length ? state.batches.map(b => {
-        const s = state.batchStats[b.id];
-        return `
-        <div class="card pad mb">
-          <div class="row">
-            <div>
-              <div class="title">${esc(b.batch_name)}</div>
-              <div class="meta">${esc(b.investors?.name || '-')} &bull; Modal ${rp(b.amount_invested)}</div>
-              ${s && s.ownershipRatio !== undefined ? `<div class="meta" style="color:var(--primary);margin-top:2px;font-weight:600">Porsi Kepemilikan: ${s.ownershipRatio.toFixed(1)}% dari Total Global</div>` : ''}
+      <div class="tiny mb">Per Batch / Proyek</div>
+      ${(() => {
+        if (!state.batches.length) return `<div class="empty">Belum ada batch investasi. Tambah di tab Batch.</div>`;
+        
+        // Group by batch_name
+        const groups = {};
+        state.batches.forEach(b => {
+          const name = (b.batch_name || 'Tanpa Nama').trim();
+          if (!groups[name]) groups[name] = [];
+          groups[name].push(b);
+        });
+
+        return Object.entries(groups).map(([groupName, groupBatches]) => {
+          // Calculate group totals
+          let grpOmzet = 0, grpModal = 0, grpNetProfit = 0, grpInvestorShare = 0, grpWithdrawn = 0, grpNeedsReview = 0;
+          let grpTotalInvested = 0;
+          let isActive = false;
+          let persen = 0;
+          
+          groupBatches.forEach(b => {
+            if (b.status === 'active') isActive = true;
+            grpTotalInvested += Number(b.amount_invested || 0);
+            const s = state.batchStats[b.id];
+            if (s) {
+              grpOmzet += s.omzet;
+              grpModal += s.modal;
+              grpNetProfit += s.netProfit;
+              grpInvestorShare += s.investorShare;
+              grpWithdrawn += (s.withdrawnAmount || 0);
+              grpNeedsReview += (s.needsReview || 0);
+              if (s.persen > 0) persen = s.persen;
+            }
+          });
+          
+          const sisaBelumCair = grpInvestorShare - grpWithdrawn;
+          const groupId = 'grp-' + groupName.replace(/[^a-zA-Z0-9]/g, '');
+
+          return `
+          <div class="card pad mb" style="border: 2px solid var(--border); box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+            <div class="row" style="cursor:pointer;" onclick="toggleGroup('${groupId}')">
+              <div>
+                <div class="title" style="font-size:1.2rem;font-weight:900;">${esc(groupName)}</div>
+                <div class="meta">${groupBatches.length} Investor &bull; Total Modal ${rp(grpTotalInvested)}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px;">
+                <span class="chip ${isActive ? 'active' : 'closed'}">${isActive ? 'AKTIF' : 'CLOSED'}</span>
+                <i id="icon-${groupId}" class="fas fa-chevron-down" style="color:var(--text-muted);transition:transform 0.3s;"></i>
+              </div>
             </div>
-            <span class="chip ${b.status === 'active' ? 'active' : 'closed'}">${b.status === 'active' ? 'AKTIF' : 'CLOSED'}</span>
-          </div>
-          ${s ? `
-          <div class="sep"></div>
-          <div class="grid2" style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:12px">
-            <div><div class="stat-label">Omzet Proyek</div><div style="font-weight:600">${rp(s.omzet)}</div></div>
-            <div><div class="stat-label">Modal Terjual</div><div style="font-weight:600">${rp(s.modal)}</div></div>
-            <div><div class="stat-label">Profit Bersih</div><div style="font-weight:800">${rp(s.netProfit)}</div></div>
-            <div>
-              <div class="stat-label">Bagian Investor (${s.persen}%)</div>
-              <div style="font-weight:800;color:var(--primary)">${rp(s.investorShare)}</div>
+            
+            <div class="sep"></div>
+            <div class="grid2" style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px;">
+              <div><div class="stat-label">Omzet Proyek</div><div style="font-weight:600">${rp(grpOmzet)}</div></div>
+              <div><div class="stat-label">Modal Terjual</div><div style="font-weight:600">${rp(grpModal)}</div></div>
+              <div><div class="stat-label">Profit Bersih</div><div style="font-weight:800">${rp(grpNetProfit)}</div></div>
+              <div>
+                <div class="stat-label">Bagian Investor (${persen}%)</div>
+                <div style="font-weight:800;color:var(--primary)">${rp(grpInvestorShare)}</div>
+              </div>
+              ${grpWithdrawn ? `
+              <div>
+                <div class="stat-label">Telah Dicairkan</div>
+                <div style="font-weight:600;color:var(--text-muted)">${rp(grpWithdrawn)}</div>
+              </div>
+              <div>
+                <div class="stat-label">Sisa Belum Cair</div>
+                <div style="font-weight:800;color:${sisaBelumCair > 0 ? 'var(--warning)' : 'var(--success)'}">${rp(sisaBelumCair)}</div>
+              </div>
+              ` : ''}
             </div>
-            ${s.withdrawnAmount ? `
-            <div>
-              <div class="stat-label">Telah Dicairkan</div>
-              <div style="font-weight:600;color:var(--text-muted)">${rp(s.withdrawnAmount)}</div>
+            ${grpNeedsReview ? `<div class="meta" style="color:var(--danger);margin-bottom:12px"><i class="fas fa-triangle-exclamation"></i> ${grpNeedsReview} transaksi perlu dicek manual (harga_jual mungkin belum sesuai)</div>` : ''}
+            
+            <div id="${groupId}" style="display:none; margin-top:16px; border-top:1px dashed var(--border); padding-top:16px;">
+              <h4 style="font-size:0.9rem; font-weight:800; color:var(--text-muted); margin-bottom:12px;">Rincian Tiap Investor:</h4>
+              ${groupBatches.map(b => {
+                const s = state.batchStats[b.id];
+                return `
+                <div style="background:#FFF; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px;">
+                  <div class="row" style="margin-bottom:8px;">
+                    <div>
+                      <div style="font-weight:800;">${esc(b.investors?.name || '-')}</div>
+                      <div class="meta">Modal ${rp(b.amount_invested)}</div>
+                      ${s && s.ownershipRatio !== undefined ? `<div class="meta" style="color:var(--primary);margin-top:2px;font-weight:600">Porsi Kepemilikan: ${s.ownershipRatio.toFixed(1)}%</div>` : ''}
+                    </div>
+                    <span class="chip ${b.status === 'active' ? 'active' : 'closed'}">${b.status === 'active' ? 'AKTIF' : 'CLOSED'}</span>
+                  </div>
+                  ${s ? `
+                  <div class="grid2" style="background:var(--bg-body); border-radius:6px; padding:8px; margin-bottom:8px;">
+                    <div><div class="stat-label" style="font-size:0.7rem">Omzet Proyek (Porsi)</div><div style="font-weight:600;font-size:0.85rem">${rp(s.omzet)}</div></div>
+                    <div><div class="stat-label" style="font-size:0.7rem">Profit Bersih (Porsi)</div><div style="font-weight:800;font-size:0.85rem">${rp(s.netProfit)}</div></div>
+                    <div>
+                      <div class="stat-label" style="font-size:0.7rem">Hak Profit Investor</div>
+                      <div style="font-weight:800;font-size:0.85rem;color:var(--primary)">${rp(s.investorShare)}</div>
+                    </div>
+                    <div>
+                      <div class="stat-label" style="font-size:0.7rem">Sisa Belum Cair</div>
+                      <div style="font-weight:800;font-size:0.85rem;color:${s.investorShare - (s.withdrawnAmount || 0) > 0 ? 'var(--warning)' : 'var(--success)'}">${rp(s.investorShare - (s.withdrawnAmount || 0))}</div>
+                    </div>
+                  </div>
+                  ${(s.investorShare - (s.withdrawnAmount || 0)) > 0 ? `<button class="btn success full" style="padding:6px;font-size:0.85rem;" onclick="openCairkanModal('${b.id}')"><i class="fas fa-hand-holding-dollar"></i> Cairkan</button>` : `<div class="meta" style="text-align:center;color:var(--success);font-weight:700;"><i class="fas fa-check"></i> Sudah Lunas</div>`}
+                  ` : `<div class="meta">Klik "Hitung" untuk lihat omzet & profit.</div>`}
+                </div>`;
+              }).join('')}
             </div>
-            <div>
-              <div class="stat-label">Sisa Belum Cair</div>
-              <div style="font-weight:800;color:${s.investorShare - s.withdrawnAmount > 0 ? 'var(--warning)' : 'var(--success)'}">${rp(s.investorShare - s.withdrawnAmount)}</div>
-            </div>
-            ` : ''}
-          </div>
-          ${s.needsReview ? `<div class="meta" style="color:var(--danger);margin-top:8px"><i class="fas fa-triangle-exclamation"></i> ${s.needsReview} transaksi perlu dicek manual (harga_jual mungkin belum sesuai)</div>` : ''}
-          ${(s.investorShare - (s.withdrawnAmount || 0)) > 0 ? `<button class="btn success full" style="margin-top:10px" onclick="openCairkanModal('${b.id}')"><i class="fas fa-hand-holding-dollar"></i> Cairkan Bagi Hasil</button>` : `<button class="btn full" disabled style="margin-top:10px; opacity:0.5"><i class="fas fa-check"></i> Seluruh Profit Telah Dicairkan</button>`}
-          ` : `<div class="meta" style="margin-top:8px">Klik "Hitung" untuk lihat omzet & profit batch ini.</div>`}
-        </div>`;
-      }).join('') : `<div class="empty">Belum ada batch investasi. Tambah di tab Batch.</div>`}
+          </div>`;
+        }).join('');
+      })()}
     </div>
     <div class="modal" id="cairkanModal"></div>
   `;
 }
+
+window.toggleGroup = function(groupId) {
+  const el = document.getElementById(groupId);
+  const icon = document.getElementById('icon-' + groupId);
+  if (el) {
+    if (el.style.display === 'none') {
+      el.style.display = 'block';
+      if (icon) icon.style.transform = 'rotate(180deg)';
+    } else {
+      el.style.display = 'none';
+      if (icon) icon.style.transform = 'rotate(0deg)';
+    }
+  }
+};
 
 window.refreshStats = async function () {
   setBusy(true);
@@ -477,6 +596,7 @@ function renderBatches() {
             <span class="chip ${b.status === 'active' ? 'active' : 'closed'}">${b.status === 'active' ? 'AKTIF' : 'CLOSED'}</span>
           </div>
           <div style="display:flex;gap:6px;margin-top:10px">
+            <button class="btn green" style="flex:1" onclick="openManualProfitModal('${b.id}', '${(b.investors?.name||'').replace(/'/g,"\\'").trim()}', '${(b.batch_name||'').replace(/'/g,"\\'").trim()}')"><i class="fas fa-plus"></i> Profit</button>
             <button class="btn" style="flex:1" onclick="openBatchFormModal('${b.id}')"><i class="fas fa-pen"></i> Edit</button>
             <button class="btn red" style="flex:1" onclick="deleteBatch('${b.id}','${(b.batch_name||'').replace(/'/g,"\\'")}')"><i class="fas fa-trash"></i> Hapus</button>
           </div>
@@ -516,7 +636,7 @@ function renderDistribution() {
 }
 
 function renderPengaturan() {
-  const adminData = JSON.parse(sessionStorage.getItem(SESSION_KEY) || '{}');
+  const adminData = JSON.parse(localStorage.getItem(SESSION_KEY) || '{}');
   const isFallback = adminData.is_fallback;
   
   return `
@@ -553,7 +673,7 @@ window.updateAdminCredentials = async function(id) {
   if (!username || !pin) return toast('Username dan PIN tidak boleh kosong', true);
   
   const confirmPin = prompt('Masukkan PIN lama untuk verifikasi:');
-  const adminData = JSON.parse(sessionStorage.getItem(SESSION_KEY) || '{}');
+  const adminData = JSON.parse(localStorage.getItem(SESSION_KEY) || '{}');
   if (String(confirmPin) !== String(adminData.pin)) return toast('PIN salah!', true);
   
   setBusy(true);
@@ -564,7 +684,7 @@ window.updateAdminCredentials = async function(id) {
     // Update session
     adminData.username = username;
     adminData.pin = pin;
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(adminData));
+    localStorage.setItem(SESSION_KEY, JSON.stringify(adminData));
     
     toast('Kredensial berhasil diubah!');
   } catch(err) {
@@ -678,9 +798,23 @@ window.saveProject = async function (id) {
     } else {
       const { error } = await sb.from('projects').insert([{ name, target_amount, status }]);
       if (error) throw error;
+      
+      // Auto-create in investment_batch_catalog
+      const pricePerLot = 200000; // Default 200rb
+      const maxLots = target_amount ? Math.floor(target_amount / pricePerLot) : 0;
+      await sb.from('investment_batch_catalog').insert([{
+        batch_name: name,
+        description: name,
+        total_target: target_amount || 0,
+        price_per_lot: pricePerLot,
+        max_lots: maxLots,
+        status: status === 'active' ? 'open' : 'closed',
+        active_month: 'TBA'
+      }]);
     }
     closeModal('projectFormModal');
     await loadProjects();
+    await loadCatalog(); // Refresh catalog state too
     render();
     toast('Proyek disimpan');
   } catch (err) {
@@ -726,9 +860,13 @@ window.openBatchFormModal = function (id) {
       <select id="batchName" class="input" style="margin-top:6px;margin-bottom:10px">
         ${state.projects.map(p => `<option value="${esc(p.name)}" ${b?.batch_name === p.name ? 'selected' : ''}>${esc(p.name)}</option>`).join('') || '<option value="">Belum ada master proyek</option>'}
       </select>
+      <div class="tiny">Jumlah Lot (Kosongi jika tidak ingin memotong sisa lot katalog)</div>
+      <input id="batchLots" class="input" style="margin-top:6px;margin-bottom:10px" type="number" min="0" value="0" onchange="autoCalculateAmount()">
       
       <div class="tiny">Dana Diinvestasikan Oleh Investor Ini (Rp)</div>
       <input id="batchAmount" class="input" style="margin-top:6px;margin-bottom:10px" type="text" inputmode="numeric" onkeyup="formatRupiahInput(this)" value="${b?.amount_invested ? parseInt(b.amount_invested, 10).toLocaleString('id-ID') : ''}" placeholder="10.000.000">
+      <div class="tiny">Tanggal Aktif (Kosong = Otomatis Bulan Depan)</div>
+      <input id="batchStartDate" class="input" style="margin-top:6px;margin-bottom:10px" type="date" value="${b?.start_date || ''}">
       <div class="tiny">Status</div>
       <select id="batchStatus" class="input" style="margin-top:6px;margin-bottom:14px">
         <option value="active" ${b?.status !== 'closed' ? 'selected' : ''}>Aktif</option>
@@ -739,11 +877,25 @@ window.openBatchFormModal = function (id) {
   modal.className = 'modal show';
 };
 
+window.autoCalculateAmount = function() {
+  const lots = Number($('batchLots').value) || 0;
+  const batchName = $('batchName').value;
+  if (!lots || !batchName) return;
+  const catalog = state.catalog.find(c => c.batch_name.trim().toLowerCase() === batchName.trim().toLowerCase());
+  if (catalog && catalog.price_per_lot) {
+    const total = lots * Number(catalog.price_per_lot);
+    $('batchAmount').value = total.toLocaleString('id-ID');
+  }
+};
+
 window.saveBatch = async function (id) {
   const investor_id = $('batchInvestor').value;
   const batch_name = $('batchName').value;
   const amount_invested = parseRupiahInput($('batchAmount').value) || 0;
   const status = $('batchStatus').value;
+  let start_date = $('batchStartDate').value;
+  const inputLots = Number($('batchLots').value) || 0;
+  
   if (!investor_id) return toast('Pilih investor dulu (tambah investor kalau belum ada)', true);
   if (!batch_name) return toast('Pilih master proyek dulu', true);
 
@@ -757,18 +909,33 @@ window.saveBatch = async function (id) {
     const totalExisting = otherBatches.reduce((acc, b) => acc + Number(b.amount_invested || 0), 0);
     const newTotal = totalExisting + amount_invested;
     if (newTotal > target_amount) {
-       return toast(`Dana kepenuhan! Sisa slot maksimal proyek ini: Rp ${target_amount - totalExisting}`, true);
+      return toast(`Dana kepenuhan! Sisa slot maksimal proyek ini: Rp ${target_amount - totalExisting}`, true);
     }
+  }
+
+  if (!start_date) {
+    const d = new Date();
+    d.setMonth(d.getMonth() + 1);
+    start_date = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-01';
   }
 
   setBusy(true);
   try {
     if (id) {
-      const { error } = await sb.from('investment_batches').update({ investor_id, batch_name, amount_invested, target_amount, status }).eq('id', id);
+      const { error } = await sb.from('investment_batches').update({ investor_id, batch_name, amount_invested, target_amount, status, start_date }).eq('id', id);
       if (error) throw error;
     } else {
-      const { error } = await sb.from('investment_batches').insert([{ investor_id, batch_name, amount_invested, target_amount, status }]);
+      const { error } = await sb.from('investment_batches').insert([{ investor_id, batch_name, amount_invested, target_amount, status, start_date }]);
       if (error) throw error;
+      
+      // Update catalog lots_sold if lots > 0
+      if (inputLots > 0) {
+        const catalog = state.catalog.find(c => c.batch_name.trim().toLowerCase() === batch_name.trim().toLowerCase());
+        if (catalog) {
+          const newLotsSold = (Number(catalog.lots_sold) || 0) + inputLots;
+          await sb.from('investment_batch_catalog').update({ lots_sold: newLotsSold }).eq('id', catalog.id);
+        }
+      }
     }
     closeModal('batchFormModal');
     await loadBatches();
@@ -793,6 +960,68 @@ window.deleteBatch = async function (id, name) {
   } catch (err) {
     console.error(err);
     toast('Gagal menghapus batch', true);
+  } finally {
+    setBusy(false);
+  }
+};
+
+window.openManualProfitModal = function (batchId, investorName, batchName) {
+  const modal = $('batchFormModal');
+  modal.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Tambah Profit Manual</h2>
+        <button class="close-btn" onclick="closeModal('batchFormModal')"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="modal-body">
+        <p>Investor: <b>${esc(investorName)}</b></p>
+        <p>Proyek: <b>${esc(batchName)}</b></p>
+        <br/>
+        <div class="form-group">
+          <label>Aksi</label>
+          <select id="manualProfitAction" class="input" style="margin-top:6px;margin-bottom:10px">
+            <option value="add">Tambah Profit (+)</option>
+            <option value="subtract">Kurangi Profit (-)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Nominal (Rp)</label>
+          <input type="text" id="manualProfitAmount" class="input rupiah-input" placeholder="Contoh: 50.000" onkeyup="formatRupiahInput(this)">
+        </div>
+        <button class="btn primary full" onclick="saveManualProfit('${batchId}')"><i class="fas fa-check"></i> Simpan Manual Profit</button>
+      </div>
+    </div>`;
+  modal.className = 'modal show';
+};
+
+window.saveManualProfit = async function (batchId) {
+  const rawAmount = parseRupiahInput($('manualProfitAmount').value) || 0;
+  if (rawAmount <= 0) return toast('Masukkan nominal yang valid', true);
+  const action = $('manualProfitAction').value;
+  const amount = action === 'subtract' ? -rawAmount : rawAmount;
+
+  setBusy(true);
+  try {
+    const payload = {
+      id: 'man_prof_' + Date.now() + '_' + Math.floor(Math.random()*1000),
+      data: {
+         amount: amount,
+         note: `[MANUAL_PROFIT] BATCH_ID=${batchId} AMOUNT=${amount}`,
+         monthKey: new Date().toISOString().substring(0, 7),
+         dateKey: new Date().toISOString(),
+         deleted: false
+      }
+    };
+    const { error } = await sb.from('transactions').insert([payload]);
+    if (error) throw error;
+    
+    closeModal('batchFormModal');
+    toast('Profit manual ditambahkan!');
+    await computeAllBatchStats(state.statsRange);
+    render();
+  } catch (err) {
+    console.error(err);
+    toast('Gagal menambah profit manual', true);
   } finally {
     setBusy(false);
   }
@@ -842,7 +1071,7 @@ window.confirmCairkan = async function (batchId) {
 
   const pin = prompt('Masukkan PIN admin untuk konfirmasi:');
   if (pin === null) return;
-  const adminData = JSON.parse(sessionStorage.getItem(SESSION_KEY) || '{}');
+  const adminData = JSON.parse(localStorage.getItem(SESSION_KEY) || '{}');
   const expectedPin = adminData.pin || String(ADMIN_PIN);
   if (String(pin) !== String(expectedPin)) return toast('PIN salah', true);
   setBusy(true);
@@ -892,7 +1121,7 @@ window.deleteDistribution = async function (id) {
   if (!confirm('Yakin ingin membatalkan / menghapus pencairan ini? Saldo akan kembali seperti semula.')) return;
   const pin = prompt('Masukkan PIN admin untuk konfirmasi:');
   if (pin === null) return;
-  const adminData = JSON.parse(sessionStorage.getItem(SESSION_KEY) || '{}');
+  const adminData = JSON.parse(localStorage.getItem(SESSION_KEY) || '{}');
   const expectedPin = adminData.pin || String(ADMIN_PIN);
   if (String(pin) !== String(expectedPin)) return toast('PIN salah', true);
   
@@ -926,7 +1155,21 @@ async function boot() {
   $('app').innerHTML = '';
   setBusy(true);
   try {
-    await Promise.all([loadInvestors(), loadProjects(), loadBatches(), loadInvestorProducts(), loadDistributions()]);
+    await Promise.all([loadInvestors(), loadProjects(), loadBatches(), loadInvestorProducts(), loadDistributions(), loadCatalog(), loadPurchases()]);
+    
+    // ONE-TIME FIX: Set start_date for batches created recently (August 2026 onwards) that are missing it
+    let needsRefetch = false;
+    for (const b of state.batches) {
+      if (!b.start_date && new Date(b.created_at).getTime() >= new Date('2026-08-01').getTime()) {
+        const d = new Date(b.created_at);
+        d.setMonth(d.getMonth() + 1);
+        const start_date = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-01';
+        await sb.from('investment_batches').update({ start_date }).eq('id', b.id);
+        needsRefetch = true;
+      }
+    }
+    if (needsRefetch) await loadBatches();
+
     await computeAllBatchStats(state.statsRange);
   } catch (err) {
     console.error(err);
@@ -937,8 +1180,305 @@ async function boot() {
   render();
 }
 
-if (sessionStorage.getItem(SESSION_KEY) === '1') {
+if (localStorage.getItem(SESSION_KEY)) {
   boot();
 } else {
   renderPinScreen();
 }
+
+// ============================================================
+// LOT MANAGEMENT - CATALOG & PURCHASE APPROVAL
+// ============================================================
+
+async function loadCatalog() {
+  const { data, error } = await sb.from('investment_batch_catalog')
+    .select('*').order('created_at', { ascending: false });
+  if (!error) state.catalog = data || [];
+}
+
+async function loadPurchases() {
+  const { data, error } = await sb
+    .from('investment_purchases')
+    .select('*, investors(name, phone), investment_batch_catalog(batch_name, price_per_lot, active_month)')
+    .order('created_at', { ascending: false })
+    .limit(100);
+  if (!error) state.purchases = data || [];
+}
+
+function renderLotManagement() {
+  const catalog = state.catalog || [];
+  const purchases = state.purchases || [];
+  const pendingPurchases = purchases.filter(p => p.payment_status === 'paid' && p.approval_status === 'waiting');
+
+  const catalogRows = catalog.map(c => `
+    <tr style="border-bottom: 1px solid var(--border);">
+      <td style="padding:12px 8px;font-weight:800;">${esc(c.batch_name)}</td>
+      <td style="padding:12px 8px;text-align:right;">${rp(c.price_per_lot)}</td>
+      <td style="padding:12px 8px;text-align:center;">${c.lots_sold} / ${c.max_lots}</td>
+      <td style="padding:12px 8px;text-align:center;"><span class="badge ${c.status === 'open' ? 'success' : c.status === 'full' ? 'pending' : 'err'}">${c.status.toUpperCase()}</span></td>
+      <td style="padding:12px 8px;display:flex;gap:6px;justify-content:center;align-items:center;">
+        <button class="btn sm" onclick="editCatalog('${c.id}')"><i class="fas fa-pen"></i></button>
+        <button class="btn sm err" onclick="deleteCatalog('${c.id}', '${esc(c.batch_name)}')"><i class="fas fa-trash"></i></button>
+      </td>
+    </tr>`).join('');
+
+  const purchaseRows = purchases.map(p => {
+    const statusColor = { paid: '#059669', pending: '#D97706', expired: '#6B7280', failed: '#DC2626' }[p.payment_status] || '#6B7280';
+    const canApprove = p.payment_status === 'paid' && p.approval_status === 'waiting';
+    return `
+    <tr style="border-bottom: 1px solid var(--border);">
+      <td style="padding:12px 8px;font-weight:800;">${esc(p.investors?.name || '-')}</td>
+      <td style="padding:12px 8px;">${esc(p.investment_batch_catalog?.batch_name || '-')}</td>
+      <td style="padding:12px 8px;text-align:right;">${p.lots} lot<br><small style="color:var(--text-muted)">${rp(p.amount)}</small></td>
+      <td style="padding:12px 8px;text-align:center;"><span style="color:${statusColor};font-weight:700;">${p.payment_status.toUpperCase()}</span></td>
+      <td style="padding:12px 8px;text-align:center;"><span class="badge ${p.approval_status === 'approved' ? 'success' : p.approval_status === 'rejected' ? 'err' : 'pending'}">${p.approval_status === 'approved' ? 'DISETUJUI' : p.approval_status === 'rejected' ? 'DITOLAK' : 'MENUNGGU'}</span></td>
+      <td style="padding:12px 8px;text-align:center;">${new Date(p.created_at).toLocaleDateString('id-ID')}</td>
+      <td style="padding:12px 8px;display:flex;gap:4px;justify-content:center;align-items:center;">
+        ${canApprove ? `
+          <button class="btn sm success" onclick="approvePurchase('${p.id}', '${p.investor_id}', '${p.catalog_id}', ${p.lots}, ${p.amount})"><i class="fas fa-check"></i> Setuju</button>
+          <button class="btn sm err" onclick="rejectPurchase('${p.id}')"><i class="fas fa-times"></i></button>
+        ` : '<span style="color:var(--text-muted);font-size:0.8rem">-</span>'}
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `
+    ${header('Lot & Pembelian', `${pendingPurchases.length} menunggu persetujuan`)}
+    <div class="content">
+      ${pendingPurchases.length > 0 ? `
+      <div class="card" style="border-left:4px solid #D97706;margin-bottom:16px;">
+        <div style="font-weight:800;color:#D97706;"><i class="fas fa-bell"></i> ${pendingPurchases.length} Pembelian Menunggu Persetujuan</div>
+        <div style="font-size:0.85rem;margin-top:4px;">Investor sudah bayar, silakan review dan setujui di tabel bawah.</div>
+      </div>` : ''}
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <h3 style="margin:0;font-size:1rem;"><i class="fas fa-tag"></i> Katalog Batch</h3>
+        <button class="btn primary sm" onclick="openCatalogForm()"><i class="fas fa-plus"></i> Tambah Batch</button>
+      </div>
+      <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+        <thead><tr style="background:var(--bg-body); border-bottom: 2px solid var(--border);">
+          <th style="padding:12px 8px;text-align:left;">Batch</th>
+          <th style="padding:12px 8px;text-align:right;">Harga/Lot</th>
+          <th style="padding:12px 8px;text-align:center;">Lot Terjual</th>
+          <th style="padding:12px 8px;text-align:center;">Status</th>
+          <th style="padding:12px 8px;text-align:center;">Aksi</th>
+        </tr></thead>
+        <tbody>${catalogRows || '<tr><td colspan="5" style="text-align:center;padding:16px;color:var(--text-muted);">Belum ada katalog</td></tr>'}</tbody>
+      </table></div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:20px 0 10px;">
+        <h3 style="margin:0;font-size:1rem;"><i class="fas fa-receipt"></i> Riwayat Pembelian Investor</h3>
+        <button class="btn sm" onclick="refreshLotMgmt()"><i class="fas fa-refresh"></i></button>
+      </div>
+      <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+        <thead><tr style="background:var(--bg-body); border-bottom: 2px solid var(--border);">
+          <th style="padding:12px 8px;text-align:left;">Investor</th>
+          <th style="padding:12px 8px;text-align:left;">Batch</th>
+          <th style="padding:12px 8px;text-align:right;">Lot</th>
+          <th style="padding:12px 8px;text-align:center;">Bayar</th>
+          <th style="padding:12px 8px;text-align:center;">Approval</th>
+          <th style="padding:12px 8px;text-align:center;">Tanggal</th>
+          <th style="padding:12px 8px;text-align:center;">Aksi</th>
+        </tr></thead>
+        <tbody>${purchaseRows || '<tr><td colspan="7" style="text-align:center;padding:16px;color:var(--text-muted);">Belum ada pembelian</td></tr>'}</tbody>
+      </table></div>
+    </div>
+
+    <!-- Modal Catalog Form -->
+    <div id="catalogModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;padding:20px;overflow-y:auto;">
+      <div style="background:#fff;border-radius:16px;padding:20px;max-width:400px;margin:0 auto;">
+        <h3 id="catalogModalTitle" style="margin-bottom:16px;">Tambah Batch Katalog</h3>
+        <input type="hidden" id="catalogId">
+        <div style="margin-bottom:10px;"><label style="font-size:0.85rem;font-weight:700;">Nama Batch</label>
+          <input type="text" id="cBatchName" class="input" placeholder="e.g. PARIS"></div>
+        <div style="margin-bottom:10px;"><label style="font-size:0.85rem;font-weight:700;">Deskripsi</label>
+          <input type="text" id="cDesc" class="input" placeholder="Opsional"></div>
+        <div style="margin-bottom:10px;"><label style="font-size:0.85rem;font-weight:700;">Total Target Dana (Rp)</label>
+          <input type="number" id="cTarget" class="input" placeholder="10000000" min="0"></div>
+        <div style="margin-bottom:10px;"><label style="font-size:0.85rem;font-weight:700;">Harga per Lot (Rp)</label>
+          <input type="number" id="cPricePerLot" class="input" placeholder="200000" min="1000"></div>
+        <div style="margin-bottom:16px;"><label style="font-size:0.85rem;font-weight:700;">Status</label>
+          <select id="cStatus" class="input"><option value="open">Open</option><option value="closed">Closed</option></select></div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn primary" style="flex:1;" onclick="saveCatalog()">Simpan</button>
+          <button class="btn" onclick="closeCatalogModal()">Batal</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+window.openCatalogForm = function() {
+  $('catalogId').value = '';
+  $('cBatchName').value = '';
+  $('cDesc').value = '';
+  $('cTarget').value = '';
+  $('cPricePerLot').value = '';
+  $('cStatus').value = 'open';
+  $('catalogModalTitle').textContent = 'Tambah Batch Katalog';
+  $('catalogModal').style.display = 'block';
+};
+
+window.editCatalog = function(id) {
+  const c = state.catalog.find(x => x.id === id);
+  if (!c) return;
+  $('catalogId').value = c.id;
+  $('cBatchName').value = c.batch_name;
+  $('cDesc').value = c.description || '';
+  $('cTarget').value = c.total_target;
+  $('cPricePerLot').value = c.price_per_lot;
+  $('cStatus').value = c.status;
+  $('catalogModalTitle').textContent = 'Edit Batch Katalog';
+  $('catalogModal').style.display = 'block';
+};
+
+window.closeCatalogModal = function() {
+  $('catalogModal').style.display = 'none';
+};
+
+window.saveCatalog = async function() {
+  const id = $('catalogId').value;
+  const batchName = $('cBatchName').value.trim().toUpperCase();
+  const description = $('cDesc').value.trim();
+  const totalTarget = Number($('cTarget').value) || 0;
+  const pricePerLot = Number($('cPricePerLot').value) || 0;
+  const status = $('cStatus').value;
+
+  if (!batchName) return toast('Nama batch wajib diisi', true);
+  if (pricePerLot <= 0) return toast('Harga per lot harus > 0', true);
+
+  const maxLots = pricePerLot > 0 ? Math.floor(totalTarget / pricePerLot) : 0;
+  // Kita isi active_month dengan nilai dummy (TBA) karena sekarang dihitung otomatis per pembeli,
+  // tapi database masih mewajibkan kolom ini diisi.
+  const payload = { batch_name: batchName, description, total_target: totalTarget, price_per_lot: pricePerLot, max_lots: maxLots, status, active_month: 'TBA' };
+
+  setBusy(true);
+  try {
+    if (id) {
+      const { error } = await sb.from('investment_batch_catalog').update(payload).eq('id', id);
+      if (error) throw error;
+      
+      // Auto-sync update ke tabel projects
+      const { data: existingProjs } = await sb.from('projects').select('id').eq('name', batchName);
+      if (existingProjs && existingProjs.length > 0) {
+        await sb.from('projects').update({ target_amount: totalTarget, status: status === 'open' ? 'active' : 'closed' }).eq('name', batchName);
+      } else {
+        await sb.from('projects').insert({ name: batchName, target_amount: totalTarget, status: status === 'open' ? 'active' : 'closed' });
+      }
+      toast('Katalog & Master Proyek diperbarui!');
+    } else {
+      const { error } = await sb.from('investment_batch_catalog').insert({ ...payload, lots_sold: 0, lots_pending: 0 });
+      if (error) throw error;
+      
+      // Auto-sync ke tabel projects (Master Proyek)
+      await sb.from('projects').insert({
+        name: batchName,
+        target_amount: totalTarget,
+        status: status === 'open' ? 'active' : 'closed'
+      });
+      
+      toast('Katalog & Master Proyek ditambahkan!');
+    }
+    closeCatalogModal();
+    await Promise.all([loadCatalog(), loadProjects()]);
+    render();
+  } catch (e) {
+    toast('Gagal simpan: ' + (e.message || e), true);
+  } finally {
+    setBusy(false);
+  }
+};
+
+window.deleteCatalog = async function(id, name) {
+  if (!confirm(`Hapus katalog "${name}"?`)) return;
+  setBusy(true);
+  try {
+    const { error } = await sb.from('investment_batch_catalog').delete().eq('id', id);
+    if (error) throw error;
+    toast('Katalog dihapus.');
+    await loadCatalog();
+    render();
+  } catch (e) {
+    toast('Gagal hapus: ' + (e.message || e), true);
+  } finally {
+    setBusy(false);
+  }
+};
+
+window.approvePurchase = async function(purchaseId, investorId, catalogId, lots, amount) {
+  const now = new Date();
+  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const defaultDateStr = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}-01`;
+  
+  const inputDate = prompt(`Setujui pembelian ini?\nBatch akan dibuat otomatis di investment_batches.\n\nKapan modal investor ini akan mulai aktif/dihitung persentasenya? (Format YYYY-MM-DD)`, defaultDateStr);
+  if (inputDate === null) return; // User click cancel
+  
+  const activeMonthStr = inputDate.trim() || defaultDateStr;
+
+  setBusy(true);
+  try {
+    // Ambil detail katalog
+    const catalog = state.catalog.find(c => c.id === catalogId);
+    const batchName = catalog?.batch_name || 'Investasi';
+
+    // Buat record di investment_batches
+    const { data: newBatch, error: batchErr } = await sb.from('investment_batches').insert({
+      investor_id: investorId,
+      batch_name: batchName,
+      amount_invested: amount,
+      status: 'active',
+      start_date: activeMonthStr,
+    }).select().single();
+    if (batchErr) throw batchErr;
+
+    // Update purchase: approved + simpan batch_id
+    const { error: updateErr } = await sb.from('investment_purchases').update({
+      approval_status: 'approved',
+      approved_at: new Date().toISOString(),
+      batch_id: newBatch.id,
+    }).eq('id', purchaseId);
+    if (updateErr) throw updateErr;
+
+    // Update lots_sold di katalog
+    await sb.from('investment_batch_catalog').update({
+      lots_sold: (catalog?.lots_sold || 0) + lots,
+      lots_pending: Math.max(0, (catalog?.lots_pending || 0) - lots),
+      status: ((catalog?.lots_sold || 0) + lots) >= (catalog?.max_lots || 0) ? 'full' : 'open',
+    }).eq('id', catalogId);
+
+    toast('Pembelian disetujui! Batch investasi dibuat.');
+    await Promise.all([loadCatalog(), loadPurchases()]);
+    render();
+  } catch (e) {
+    toast('Gagal approve: ' + (e.message || e), true);
+  } finally {
+    setBusy(false);
+  }
+};
+
+window.rejectPurchase = async function(purchaseId) {
+  if (!confirm('Tolak pembelian ini?')) return;
+  setBusy(true);
+  try {
+    const { error } = await sb.from('investment_purchases').update({
+      approval_status: 'rejected',
+      approved_at: new Date().toISOString(),
+    }).eq('id', purchaseId);
+    if (error) throw error;
+    toast('Pembelian ditolak.');
+    await loadPurchases();
+    render();
+  } catch (e) {
+    toast('Gagal tolak: ' + (e.message || e), true);
+  } finally {
+    setBusy(false);
+  }
+};
+
+window.refreshLotMgmt = async function() {
+  setBusy(true);
+  await Promise.all([loadCatalog(), loadPurchases()]);
+  render();
+  setBusy(false);
+};
