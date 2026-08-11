@@ -532,11 +532,36 @@ window.refreshStats = async function () {
 };
 
 function renderInvestors() {
+  const pending = state.investors.filter(i => i.pin === 'PENDING');
+  const active = state.investors.filter(i => i.pin !== 'PENDING');
+
+  let inboxHtml = '';
+  if (pending.length > 0) {
+    inboxHtml = `
+      <div style="background:#FFF3CD; border:1px solid #FFE69C; padding:12px; border-radius:8px; margin-bottom:16px;">
+        <div style="font-weight:800; color:#856404; margin-bottom:8px;"><i class="fas fa-inbox"></i> ${pending.length} Permintaan Pendaftaran</div>
+        ${pending.map(i => `
+          <div style="background:#FFF; padding:10px; border-radius:6px; border:1px solid #FFE69C; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div style="font-weight:700;">${esc(i.name)}</div>
+              <div style="font-size:0.8rem; color:var(--text-muted);">${esc(i.phone)}</div>
+            </div>
+            <div style="display:flex;gap:4px">
+              <button class="btn sm success" onclick="openInvestorFormModal('${i.id}')">Setujui</button>
+              <button class="btn sm err" onclick="deleteInvestor('${i.id}','${(i.name||'').replace(/'/g,"\\'")}')"><i class="fas fa-times"></i></button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
   return `
     ${header('Investor', 'Kelola data investor')}
     <div class="content">
+      ${inboxHtml}
       <button class="btn primary full mb" onclick="openInvestorFormModal()"><i class="fas fa-plus"></i> Tambah Investor</button>
-      ${state.investors.length ? state.investors.map(i => `
+      ${active.length ? active.map(i => `
         <div class="card pad mb">
           <div class="row">
             <div>
@@ -549,7 +574,7 @@ function renderInvestors() {
             </div>
           </div>
         </div>
-      `).join('') : `<div class="empty">Belum ada investor.</div>`}
+      `).join('') : `<div class="empty">Belum ada investor aktif.</div>`}
     </div>
     <div class="modal" id="investorFormModal"></div>
   `;
@@ -710,7 +735,7 @@ window.openInvestorFormModal = function (id) {
       <div class="tiny">No. HP</div>
       <input id="invPhone" class="input" style="margin-top:6px;margin-bottom:10px" value="${esc(inv?.phone || '')}" placeholder="08xxxxxxxxxx">
       <div class="tiny">PIN Login Investor (4-6 digit)</div>
-      <input id="invPin" class="input" style="margin-top:6px;margin-bottom:14px" type="text" inputmode="numeric" value="${esc(inv?.pin || '')}" placeholder="misal 2468">
+      <input id="invPin" class="input" style="margin-top:6px;margin-bottom:14px" type="text" inputmode="numeric" value="${esc(inv?.pin === 'PENDING' ? '' : (inv?.pin || ''))}" placeholder="misal 2468">
       <button class="btn primary full" onclick="saveInvestor(${inv ? `'${inv.id}'` : 'null'})"><i class="fas fa-check"></i> Simpan</button>
     </div>`;
   modal.className = 'modal show';
