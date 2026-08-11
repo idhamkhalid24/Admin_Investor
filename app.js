@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // INVESTOR TRACKER - ADMIN PANEL
 // Backend: Supabase (project yang sama dengan aplikasi_admin_only)
 // ============================================================
@@ -63,15 +63,12 @@ let pinBuffer = '';
 function renderPinScreen() {
   $('app').innerHTML = `
     <div class="pin-screen">
-      <div style="width:64px;height:64px;border-radius:18px;background:var(--primary-soft);display:flex;align-items:center;justify-content:center">
-        <i class="fas fa-chart-line" style="font-size:26px;color:var(--primary)"></i>
-      </div>
-      <div style="text-align:center">
-        <div style="font-weight:800;font-size:17px">Investor Tracker</div>
-        <div class="meta">Masukkan Username dan PIN admin</div>
+      <div style="text-align:center; margin-bottom:20px;">
+        <div style="font-weight:900;font-size:24px;color:#000;">Investor Tracker</div>
+        <div class="meta" style="color:#000;font-weight:700;">Masukkan Username dan PIN admin</div>
       </div>
       
-      <div style="display:flex; flex-direction:column; gap:12px; margin-top:24px; width:100%; max-width:300px;">
+      <div style="display:flex; flex-direction:column; gap:12px; margin-top:10px; width:100%; max-width:300px;">
         <input type="text" id="loginUsername" class="input" placeholder="Username (contoh: admin)" style="text-align:center;font-weight:bold;text-transform:lowercase; padding:12px">
         <div style="position:relative">
           <input type="password" pattern="[0-9]*" inputmode="numeric" id="loginPin" class="input" placeholder="PIN Angka" style="text-align:center;font-weight:bold;letter-spacing:4px; padding:12px; width:100%; box-sizing:border-box" onkeydown="if(event.key==='Enter') attemptLogin()">
@@ -104,7 +101,7 @@ window.attemptLogin = async function () {
   setBusy(true);
   try {
     // Check if table exists and has rows
-    const { data: allAdmins, error: listError } = await sb.from('admin_users').select('id').limit(1);
+    const { data: allAdmins, error: listError } = await sb.from('admin_investor').select('id').limit(1);
     
     // If table doesn't exist or is completely empty, allow fallback
     if (listError || !allAdmins || allAdmins.length === 0) {
@@ -114,14 +111,20 @@ window.attemptLogin = async function () {
         return;
       } else {
         if (listError && listError.code === '42P01') {
-          return toast('Tabel admin_users belum dibuat. Login default: admin / ' + ADMIN_PIN, true);
+          return toast('Tabel admin_investor belum dibuat. Login default: admin / ' + ADMIN_PIN, true);
+        }
+        if (listError) {
+          console.error("Supabase listError:", listError);
+          alert("Error Supabase: " + listError.message);
+        } else if (!allAdmins || allAdmins.length === 0) {
+          alert("Tabel admin_investor kosong! Tidak ada data admin.");
         }
         return toast('Username atau PIN salah', true);
       }
     }
 
     // Table exists and has at least 1 admin, verify credentials
-    const { data, error } = await sb.from('admin_users')
+    const { data, error } = await sb.from('admin_investor')
       .select('*')
       .ilike('username', username)
       .eq('pin', pin)
@@ -319,8 +322,7 @@ function tabBar() {
     ['projects', 'fa-briefcase', 'Master Proyek'],
     ['batches', 'fa-layer-group', 'Batch Inv'],
     ['distribution', 'fa-hand-holding-dollar', 'Pencairan'],
-    ['lotmgmt', 'fa-cart-shopping', 'Lot & Pembelian'],
-    ['pengaturan', 'fa-cog', 'Pengaturan'],
+    ['lotmgmt', 'fa-cart-shopping', 'Lot & Pembelian']
   ];
   return `<nav class="tabs">${tabs.map(([p, icon, label]) => `
     <button class="tab ${state.page === p ? 'active' : ''}" onclick="go('${p}')">
@@ -331,7 +333,10 @@ function header(title, sub) {
   return `<div class="header">
     <div class="row" style="align-items:flex-start">
       <div><h1>${esc(title)}</h1><div class="sub">${esc(sub || '')}</div></div>
-      <button onclick="logoutAdmin()" style="background:rgba(255,255,255,.18);border:none;color:#fff;width:34px;height:34px;border-radius:10px;cursor:pointer"><i class="fas fa-lock"></i></button>
+      <div style="display:flex;gap:8px;">
+        <button onclick="go('pengaturan')" style="background:#000;border:none;color:#fff;width:34px;height:34px;border-radius:8px;cursor:pointer"><i class="fas fa-cog"></i></button>
+        <button onclick="logoutAdmin()" style="background:var(--danger);border:none;color:#000;width:34px;height:34px;border-radius:8px;cursor:pointer"><i class="fas fa-sign-out-alt"></i></button>
+      </div>
     </div>
   </div>`;
 }
@@ -353,6 +358,7 @@ function render() {
   else if (state.page === 'batches') body = renderBatches();
   else if (state.page === 'distribution') body = renderDistribution();
   else if (state.page === 'lotmgmt') body = renderLotManagement();
+  else if (state.page === 'pengaturan') body = renderPengaturan();
   $('app').innerHTML = body + tabBar();
 }
 
@@ -428,7 +434,7 @@ function renderDashboard() {
           const groupId = 'grp-' + groupName.replace(/[^a-zA-Z0-9]/g, '');
 
           return `
-          <div class="card pad mb" style="border: 2px solid var(--border); box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+          <div class="card pad mb" style="border: 3px solid #000; border-radius: 8px;">
             <div class="row" style="cursor:pointer;" onclick="toggleGroup('${groupId}')">
               <div>
                 <div class="title" style="font-size:1.2rem;font-weight:900;">${esc(groupName)}</div>
@@ -441,13 +447,13 @@ function renderDashboard() {
             </div>
             
             <div class="sep"></div>
-            <div class="grid2" style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px;">
+            <div class="grid2" style="background:var(--bg); border:3px solid #000; border-radius:8px; padding:12px; margin-bottom:12px;">
               <div><div class="stat-label">Omzet Proyek</div><div style="font-weight:600">${rp(grpOmzet)}</div></div>
               <div><div class="stat-label">Modal Terjual</div><div style="font-weight:600">${rp(grpModal)}</div></div>
               <div><div class="stat-label">Profit Bersih</div><div style="font-weight:800">${rp(grpNetProfit)}</div></div>
               <div>
                 <div class="stat-label">Bagian Investor (${persen}%)</div>
-                <div style="font-weight:800;color:var(--primary)">${rp(grpInvestorShare)}</div>
+                <div style="font-weight:800;color:#000">${rp(grpInvestorShare)}</div>
               </div>
               ${grpWithdrawn ? `
               <div>
@@ -467,22 +473,22 @@ function renderDashboard() {
               ${groupBatches.map(b => {
                 const s = state.batchStats[b.id];
                 return `
-                <div style="background:#FFF; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px;">
+                <div style="background:#FFF; border:3px solid #000; border-radius:8px; padding:12px; margin-bottom:12px;">
                   <div class="row" style="margin-bottom:8px;">
                     <div>
                       <div style="font-weight:800;">${esc(b.investors?.name || '-')}</div>
                       <div class="meta">Modal ${rp(b.amount_invested)}</div>
-                      ${s && s.ownershipRatio !== undefined ? `<div class="meta" style="color:var(--primary);margin-top:2px;font-weight:600">Porsi Kepemilikan: ${s.ownershipRatio.toFixed(1)}%</div>` : ''}
+                      ${s && s.ownershipRatio !== undefined ? `<div class="meta" style="color:#000;margin-top:2px;font-weight:700">Porsi Kepemilikan: ${s.ownershipRatio.toFixed(1)}%</div>` : ''}
                     </div>
                     <span class="chip ${b.status === 'active' ? 'active' : 'closed'}">${b.status === 'active' ? 'AKTIF' : 'CLOSED'}</span>
                   </div>
                   ${s ? `
-                  <div class="grid2" style="background:var(--bg-body); border-radius:6px; padding:8px; margin-bottom:8px;">
+                  <div class="grid2" style="background:var(--bg-body); border-radius:6px; padding:8px; margin-bottom:8px; border:2px solid #000;">
                     <div><div class="stat-label" style="font-size:0.7rem">Omzet Proyek (Porsi)</div><div style="font-weight:600;font-size:0.85rem">${rp(s.omzet)}</div></div>
                     <div><div class="stat-label" style="font-size:0.7rem">Profit Bersih (Porsi)</div><div style="font-weight:800;font-size:0.85rem">${rp(s.netProfit)}</div></div>
                     <div>
                       <div class="stat-label" style="font-size:0.7rem">Hak Profit Investor</div>
-                      <div style="font-weight:800;font-size:0.85rem;color:var(--primary)">${rp(s.investorShare)}</div>
+                      <div style="font-weight:800;font-size:0.85rem;color:#000">${rp(s.investorShare)}</div>
                     </div>
                     <div>
                       <div class="stat-label" style="font-size:0.7rem">Sisa Belum Cair</div>
@@ -538,10 +544,10 @@ function renderInvestors() {
   let inboxHtml = '';
   if (pending.length > 0) {
     inboxHtml = `
-      <div style="background:#FFF3CD; border:1px solid #FFE69C; padding:12px; border-radius:8px; margin-bottom:16px;">
-        <div style="font-weight:800; color:#856404; margin-bottom:8px;"><i class="fas fa-inbox"></i> ${pending.length} Permintaan Pendaftaran</div>
+      <div style="background:#FDE047; border:3px solid #000; padding:12px; border-radius:8px; margin-bottom:16px;">
+        <div style="font-weight:800; color:#000; margin-bottom:8px;"><i class="fas fa-bell"></i> ${pending.length} Inbox Pendaftaran</div>
         ${pending.map(i => `
-          <div style="background:#FFF; padding:10px; border-radius:6px; border:1px solid #FFE69C; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+          <div style="background:#FFF; padding:10px; border-radius:6px; border:1px solid #000; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
             <div>
               <div style="font-weight:700;">${esc(i.name)}</div>
               <div style="font-size:0.8rem; color:var(--text-muted);">${esc(i.phone)}</div>
@@ -590,7 +596,7 @@ function renderProjects() {
           <div class="row">
             <div>
               <div class="title">${esc(p.name)}</div>
-              ${p.target_amount ? `<div class="meta" style="color:var(--primary); font-weight:600">Target Maksimal: ${rp(p.target_amount)}</div>` : '<div class="meta">Tanpa batas maksimal</div>'}
+              ${p.target_amount ? `<div class="meta" style="color:#000; font-weight:700">Target Maksimal: ${rp(p.target_amount)}</div>` : '<div class="meta" style="color:#000; font-weight:700">Tanpa batas maksimal</div>'}
             </div>
             <span class="chip ${p.status === 'active' ? 'active' : 'closed'}">${p.status === 'active' ? 'AKTIF' : 'CLOSED'}</span>
           </div>
@@ -606,31 +612,72 @@ function renderProjects() {
 }
 
 function renderBatches() {
+  const groups = {};
+  state.batches.forEach(b => {
+    const key = b.batch_name || 'Tanpa Nama';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(b);
+  });
+
+  const groupHtml = Object.keys(groups).length > 0 ? Object.entries(groups).map(([gName, batches]) => {
+    const totalModal = batches.reduce((sum, b) => sum + (Number(b.amount_invested) || 0), 0);
+    const activeCount = batches.filter(b => b.status === 'active').length;
+    const groupId = 'grp_' + gName.replace(/[^a-zA-Z0-9]/g, '_');
+    
+    return `
+      <div class="card mb" style="border: 2px solid #000; border-radius: 8px; overflow: hidden; padding: 0;">
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; cursor:pointer; background:#fff;" onclick="toggleBatchGroup('${groupId}')">
+          <div>
+            <div style="font-weight:900; font-size:1.1rem;">${esc(gName)}</div>
+            <div class="meta" style="color:#000; font-weight:700; font-size:0.8rem;">${batches.length} Investor | Total Modal: ${rp(totalModal)}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="chip ${activeCount > 0 ? 'active' : 'closed'}">${activeCount > 0 ? 'AKTIF' : 'CLOSED'}</span>
+            <i class="fas fa-chevron-down" id="icon_${groupId}" style="transition:transform 0.2s;"></i>
+          </div>
+        </div>
+        
+        <div id="${groupId}" style="display:none; padding:12px; background:#fafafa; border-top:2px solid #000;">
+          ${batches.map(b => `
+            <div style="background:#fff; border:2px solid #000; border-radius:6px; padding:10px; margin-bottom:10px;">
+              <div class="row" style="margin-bottom:8px;">
+                <div>
+                  <div style="font-weight:800;">${esc(b.investors?.name || '-')}</div>
+                  <div class="meta" style="margin-top:4px; margin-bottom:4px;"><span style="background:#FDE047; color:#000; padding:2px 8px; border-radius:4px; font-weight:800; font-size:0.8rem; border:2px solid #000; display:inline-block;">Modal: ${rp(b.amount_invested)}</span></div>
+                  ${b.target_amount ? `<div class="meta" style="color:#000; font-weight:700;">Target: ${rp(b.target_amount)}</div>` : ''}
+                </div>
+                <span class="chip ${b.status === 'active' ? 'active' : 'closed'}" style="font-size:10px;">${b.status === 'active' ? 'AKTIF' : 'CLOSED'}</span>
+              </div>
+              <div style="display:flex;gap:6px;">
+                <button class="btn green" style="flex:1; padding:8px 0; font-size:12px;" onclick="openManualProfitModal('${b.id}', '${(b.investors?.name||'').replace(/'/g,"\\'").trim()}', '${(b.batch_name||'').replace(/'/g,"\\'").trim()}')"><i class="fas fa-plus"></i> Profit</button>
+                <button class="btn" style="flex:1; padding:8px 0; font-size:12px;" onclick="openBatchFormModal('${b.id}')"><i class="fas fa-pen"></i> Edit</button>
+                <button class="btn red" style="flex:1; padding:8px 0; font-size:12px;" onclick="deleteBatch('${b.id}','${(b.batch_name||'').replace(/'/g,"\\'")}')"><i class="fas fa-trash"></i> Hapus</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }).join('') : `<div class="empty">Belum ada batch.</div>`;
+
   return `
     ${header('Batch Investasi', 'Kelola batch dana investor')}
     <div class="content">
       <button class="btn primary full mb" onclick="openBatchFormModal()"><i class="fas fa-plus"></i> Tambah Batch</button>
-      ${state.batches.length ? state.batches.map(b => `
-        <div class="card pad mb">
-          <div class="row">
-            <div>
-              <div class="title">${esc(b.batch_name)}</div>
-              <div class="meta">${esc(b.investors?.name || '-')} · Modal ${rp(b.amount_invested)}</div>
-              ${b.target_amount ? `<div class="meta" style="color:var(--primary); font-weight:600">Target Proyek: ${rp(b.target_amount)}</div>` : ''}
-            </div>
-            <span class="chip ${b.status === 'active' ? 'active' : 'closed'}">${b.status === 'active' ? 'AKTIF' : 'CLOSED'}</span>
-          </div>
-          <div style="display:flex;gap:6px;margin-top:10px">
-            <button class="btn green" style="flex:1" onclick="openManualProfitModal('${b.id}', '${(b.investors?.name||'').replace(/'/g,"\\'").trim()}', '${(b.batch_name||'').replace(/'/g,"\\'").trim()}')"><i class="fas fa-plus"></i> Profit</button>
-            <button class="btn" style="flex:1" onclick="openBatchFormModal('${b.id}')"><i class="fas fa-pen"></i> Edit</button>
-            <button class="btn red" style="flex:1" onclick="deleteBatch('${b.id}','${(b.batch_name||'').replace(/'/g,"\\'")}')"><i class="fas fa-trash"></i> Hapus</button>
-          </div>
-        </div>
-      `).join('') : `<div class="empty">Belum ada batch.</div>`}
+      ${groupHtml}
     </div>
-    <div class="modal" id="batchFormModal"></div>
+    <div class="modal" id="batchFormModal" style="align-items:center;"></div>
   `;
 }
+
+window.toggleBatchGroup = function(id) {
+  const el = document.getElementById(id);
+  const icon = document.getElementById('icon_' + id);
+  if (!el) return;
+  const isHidden = el.style.display === 'none';
+  el.style.display = isHidden ? 'block' : 'none';
+  if (icon) icon.style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+};
 
 function renderDistribution() {
   return `
@@ -641,14 +688,14 @@ function renderDistribution() {
           <div class="row">
             <div>
               <div class="title">${esc(d.investment_batches?.batch_name || '-')}</div>
-              <div class="meta">${esc(d.investment_batches?.investors?.name || '-')} · Periode ${esc(d.period)}</div>
+              <div class="meta">${esc(d.investment_batches?.investors?.name || '-')} Ãƒâ€šÃ‚Â· Periode ${esc(d.period)}</div>
             </div>
             <span class="chip ${d.paid_to_investor ? 'active' : 'closed'}">${d.paid_to_investor ? 'SUDAH CAIR' : 'PENDING'}</span>
           </div>
           <div class="sep"></div>
           <div class="grid2">
             <div><div class="stat-label">Profit Bersih</div><div style="font-weight:800">${rp(d.net_profit)}</div></div>
-            <div><div class="stat-label">Bagian Investor</div><div style="font-weight:800;color:var(--primary)">${rp(d.investor_share_amount)}</div></div>
+            <div><div class="stat-label">Bagian Investor</div><div style="font-weight:800;color:#000">${rp(d.investor_share_amount)}</div></div>
           </div>
           <div style="display:flex; gap:8px; margin-top:10px">
             ${!d.paid_to_investor ? `<button class="btn success" style="flex:1" onclick="markPaid('${d.id}')"><i class="fas fa-check"></i> Sudah Dicairkan</button>` : ''}
@@ -670,7 +717,7 @@ function renderPengaturan() {
       ${isFallback ? `
         <div class="card pad mb" style="border-left: 4px solid var(--warning)">
           <div style="color:var(--warning); font-weight:bold; margin-bottom:8px"><i class="fas fa-exclamation-triangle"></i> Perhatian</div>
-          <p style="font-size:0.875rem">Tabel <strong>admin_users</strong> belum dibuat di Supabase. Anda login menggunakan kredensial bawaan. Silakan jalankan kode SQL untuk membuat tabel terlebih dahulu agar bisa mengubah Username/PIN.</p>
+          <p style="font-size:0.875rem">Tabel <strong>admin_investor</strong> belum dibuat di Supabase. Anda login menggunakan kredensial bawaan. Silakan jalankan kode SQL untuk membuat tabel terlebih dahulu agar bisa mengubah Username/PIN.</p>
         </div>
       ` : ''}
       
@@ -703,7 +750,7 @@ window.updateAdminCredentials = async function(id) {
   
   setBusy(true);
   try {
-    const { error } = await sb.from('admin_users').update({ username, pin }).eq('id', id);
+    const { error } = await sb.from('admin_investor').update({ username, pin }).eq('id', id);
     if (error) throw error;
     
     // Update session
@@ -767,20 +814,21 @@ window.saveInvestor = async function (id) {
   }
 };
 window.deleteInvestor = async function (id, name) {
-  if (!confirm(`Hapus investor "${name}"? Semua batch terkait ikut terhapus.`)) return;
-  setBusy(true);
-  try {
-    const { error } = await sb.from('investors').delete().eq('id', id);
-    if (error) throw error;
-    await Promise.all([loadInvestors(), loadBatches()]);
-    render();
-    toast('Investor dihapus');
-  } catch (err) {
-    console.error(err);
-    toast('Gagal menghapus investor', true);
-  } finally {
-    setBusy(false);
-  }
+  requireAdminPin(async () => {
+    setBusy(true);
+    try {
+      const { error } = await sb.from('investors').delete().eq('id', id);
+      if (error) throw error;
+      await Promise.all([loadInvestors(), loadBatches()]);
+      render();
+      toast('Investor dihapus');
+    } catch (err) {
+      console.error(err);
+      toast('Gagal menghapus investor', true);
+    } finally {
+      setBusy(false);
+    }
+  });
 };
 
 // ============ MODALS: PROJECT ============
@@ -851,20 +899,21 @@ window.saveProject = async function (id) {
 };
 
 window.deleteProject = async function (id, name) {
-  if (!confirm(`Hapus proyek "${name}"? Ini tidak menghapus batch investasi di dalamnya.`)) return;
-  setBusy(true);
-  try {
-    const { error } = await sb.from('projects').delete().eq('id', id);
-    if (error) throw error;
-    await loadProjects();
-    render();
-    toast('Proyek dihapus');
-  } catch (err) {
-    console.error(err);
-    toast('Gagal menghapus proyek', true);
-  } finally {
-    setBusy(false);
-  }
+  requireAdminPin(async () => {
+    setBusy(true);
+    try {
+      const { error } = await sb.from('projects').delete().eq('id', id);
+      if (error) throw error;
+      await loadProjects();
+      render();
+      toast('Proyek dihapus');
+    } catch (err) {
+      console.error(err);
+      toast('Gagal menghapus proyek', true);
+    } finally {
+      setBusy(false);
+    }
+  });
 };
 
 // ============ MODALS: BATCH ============
@@ -974,31 +1023,32 @@ window.saveBatch = async function (id) {
   }
 };
 window.deleteBatch = async function (id, name) {
-  if (!confirm(`Hapus batch "${name}"? Produk yang terhubung batch ini jadi tidak terhubung.`)) return;
-  setBusy(true);
-  try {
-    const { error } = await sb.from('investment_batches').delete().eq('id', id);
-    if (error) throw error;
-    await loadBatches();
-    render();
-    toast('Batch dihapus');
-  } catch (err) {
-    console.error(err);
-    toast('Gagal menghapus batch', true);
-  } finally {
-    setBusy(false);
-  }
+  requireAdminPin(async () => {
+    setBusy(true);
+    try {
+      const { error } = await sb.from('investment_batches').delete().eq('id', id);
+      if (error) throw error;
+      await loadBatches();
+      render();
+      toast('Batch dihapus');
+    } catch (err) {
+      console.error(err);
+      toast('Gagal menghapus batch', true);
+    } finally {
+      setBusy(false);
+    }
+  });
 };
 
 window.openManualProfitModal = function (batchId, investorName, batchName) {
   const modal = $('batchFormModal');
   modal.innerHTML = `
-    <div class="modal-content">
-      <div class="modal-header">
-        <h2>Tambah Profit Manual</h2>
-        <button class="close-btn" onclick="closeModal('batchFormModal')"><i class="fas fa-times"></i></button>
+    <div class="modal-content" style="background:#fff; border:3px solid #000; border-radius:8px; padding:20px; width:100%; max-width:400px;">
+      <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h2 style="margin:0; font-size:1.2rem;">Tambah Profit Manual</h2>
+        <button class="close-btn" style="background:none; border:none; font-size:1.5rem; cursor:pointer;" onclick="closeModal('batchFormModal')"><i class="fas fa-times"></i></button>
       </div>
-      <div class="modal-body">
+      <div class="modal-body" style="font-size:0.95rem;">
         <p>Investor: <b>${esc(investorName)}</b></p>
         <p>Proyek: <b>${esc(batchName)}</b></p>
         <br/>
@@ -1141,33 +1191,23 @@ window.markPaid = async function (id) {
     setBusy(false);
   }
 };
-
 window.deleteDistribution = async function (id) {
-  if (!confirm('Yakin ingin membatalkan / menghapus pencairan ini? Saldo akan kembali seperti semula.')) return;
-  const pin = prompt('Masukkan PIN admin untuk konfirmasi:');
-  if (pin === null) return;
-  const adminData = JSON.parse(localStorage.getItem(SESSION_KEY) || '{}');
-  const expectedPin = adminData.pin || String(ADMIN_PIN);
-  if (String(pin) !== String(expectedPin)) return toast('PIN salah', true);
-  
-  setBusy(true);
-  try {
-    const { error } = await sb.from('profit_distributions').delete().eq('id', id);
-    if (error) throw error;
-    await loadDistributions();
-    
-    // Karena kita menghapus pencairan, kita perlu mengkalkulasi ulang finalStats 
-    // agar 'Sisa Belum Cair' di tab Dashboard juga terupdate (withdrawnAmount berkurang).
-    await computeAllBatchStats(state.statsRange);
-    
-    render();
-    toast('Pencairan berhasil dihapus');
-  } catch (err) {
-    console.error(err);
-    toast('Gagal menghapus pencairan', true);
-  } finally {
-    setBusy(false);
-  }
+  requireAdminPin(async () => {
+    setBusy(true);
+    try {
+      const { error } = await sb.from('profit_distributions').delete().eq('id', id);
+      if (error) throw error;
+      await loadDistributions();
+      await computeAllBatchStats(state.statsRange);
+      render();
+      toast('Pencairan berhasil dihapus');
+    } catch (err) {
+      console.error(err);
+      toast('Gagal menghapus pencairan', true);
+    } finally {
+      setBusy(false);
+    }
+  });
 };
 
 window.closeModal = function (id) {
@@ -1307,10 +1347,12 @@ function renderLotManagement() {
         <tbody>${catalogRows || '<tr><td colspan="5" style="text-align:center;padding:16px;color:var(--text-muted);">Belum ada katalog</td></tr>'}</tbody>
       </table></div>
 
-      <div style="display:flex; justify-content:space-between; align-items:center; margin:2rem 0 1rem 0;">
+      <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px; margin:2rem 0 1rem 0;">
         <h3 style="margin:0;"><i class="fas fa-receipt"></i> Riwayat Pembelian Investor</h3>
-        <button class="btn sm err" onclick="deleteAllPendingPurchases()"><i class="fas fa-trash-alt"></i> Bersihkan Semua Riwayat Gagal/Pending</button>
-        <button class="btn sm" onclick="refreshLotMgmt()"><i class="fas fa-refresh"></i></button>
+        <div style="display:flex; gap:8px;">
+          <button class="btn sm err" onclick="deleteAllPendingPurchases()"><i class="fas fa-trash-alt"></i> Hapus Pending</button>
+          <button class="btn sm" onclick="refreshLotMgmt()"><i class="fas fa-refresh"></i></button>
+        </div>
       </div>
       <div class="card" style="overflow-x:auto;">
       <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
@@ -1329,8 +1371,8 @@ function renderLotManagement() {
 
     <!-- Modal Catalog Form -->
     <div id="catalogModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;padding:20px;overflow-y:auto;">
-      <div style="background:#fff;border-radius:16px;padding:20px;max-width:400px;margin:0 auto;">
-        <h3 id="catalogModalTitle" style="margin-bottom:16px;">Tambah Batch Katalog</h3>
+      <div id="modalForm" style="background:#fff;border:3px solid #000;border-radius:8px;padding:20px;max-width:400px;margin:0 auto;">
+        <h3 id="catalogModalTitle" style="margin-top:0"><i class="fas fa-box"></i> Form Batch / Katalog</h3>
         <input type="hidden" id="catalogId">
         <div style="margin-bottom:10px;"><label style="font-size:0.85rem;font-weight:700;">Nama Batch</label>
           <input type="text" id="cBatchName" class="input" placeholder="e.g. PARIS"></div>
@@ -1432,19 +1474,20 @@ window.saveCatalog = async function() {
 };
 
 window.deleteCatalog = async function(id, name) {
-  if (!confirm(`Hapus katalog "${name}"?`)) return;
-  setBusy(true);
-  try {
-    const { error } = await sb.from('investment_batch_catalog').delete().eq('id', id);
-    if (error) throw error;
-    toast('Katalog dihapus.');
-    await loadCatalog();
-    render();
-  } catch (e) {
-    toast('Gagal hapus: ' + (e.message || e), true);
-  } finally {
-    setBusy(false);
-  }
+  requireAdminPin(async () => {
+    setBusy(true);
+    try {
+      const { error } = await sb.from('investment_batch_catalog').delete().eq('id', id);
+      if (error) throw error;
+      toast('Katalog dihapus.');
+      await loadCatalog();
+      render();
+    } catch (e) {
+      toast('Gagal hapus: ' + (e.message || e), true);
+    } finally {
+      setBusy(false);
+    }
+  });
 };
 
 window.approvePurchase = async function(purchaseId, investorId, catalogId, lots, amount) {
@@ -1452,100 +1495,94 @@ window.approvePurchase = async function(purchaseId, investorId, catalogId, lots,
   const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
   const defaultDateStr = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}-01`;
   
-  const inputDate = prompt(`Setujui pembelian ini?\nBatch akan dibuat otomatis di investment_batches.\n\nKapan modal investor ini akan mulai aktif/dihitung persentasenya? (Format YYYY-MM-DD)`, defaultDateStr);
-  if (inputDate === null) return; // User click cancel
-  
-  const activeMonthStr = inputDate.trim() || defaultDateStr;
 
+  const inputDate = prompt(`Setujui pembelian ini?\nBatch akan dibuat otomatis di investment_batches.\n\nKapan modal investor ini akan mulai aktif/dihitung persentasenya? (Format YYYY-MM-DD)`, defaultDateStr);
+  if (inputDate === null) return;
+  const activeMonthStr = inputDate.trim() || defaultDateStr;
   setBusy(true);
   try {
-    // Ambil detail katalog
     const catalog = state.catalog.find(c => c.id === catalogId);
     const batchName = catalog?.batch_name || 'Investasi';
-
-    // Buat record di investment_batches
     const { data: newBatch, error: batchErr } = await sb.from('investment_batches').insert({
-      investor_id: investorId,
-      batch_name: batchName,
-      amount_invested: amount,
-      status: 'active',
-      start_date: activeMonthStr,
+      investor_id: investorId, batch_name: batchName, amount_invested: amount, status: 'active', start_date: activeMonthStr,
     }).select().single();
     if (batchErr) throw batchErr;
-
-    // Update purchase: approved + simpan batch_id
     const { error: updateErr } = await sb.from('investment_purchases').update({
-      approval_status: 'approved',
-      approved_at: new Date().toISOString(),
-      batch_id: newBatch.id,
+      approval_status: 'approved', approved_at: new Date().toISOString(), batch_id: newBatch.id,
     }).eq('id', purchaseId);
     if (updateErr) throw updateErr;
-
-    // Update lots_sold di katalog
     await sb.from('investment_batch_catalog').update({
       lots_sold: (catalog?.lots_sold || 0) + lots,
       lots_pending: Math.max(0, (catalog?.lots_pending || 0) - lots),
       status: ((catalog?.lots_sold || 0) + lots) >= (catalog?.max_lots || 0) ? 'full' : 'open',
     }).eq('id', catalogId);
-
     toast('Pembelian disetujui! Batch investasi dibuat.');
     await Promise.all([loadCatalog(), loadPurchases()]);
     render();
-  } catch (e) {
-    toast('Gagal approve: ' + (e.message || e), true);
-  } finally {
-    setBusy(false);
-  }
+  } catch (e) { toast('Gagal approve: ' + (e.message || e), true); }
+  finally { setBusy(false); }
 };
 
 window.rejectPurchase = async function(id) {
-  if (!confirm('Tolak pembelian ini?')) return;
-  setBusy(true);
-  try {
-    const { error } = await sb.from('investment_purchases').update({ approval_status: 'rejected' }).eq('id', id);
-    if (error) throw error;
-    await refreshLotMgmt();
-    toast('Pembelian ditolak');
-  } catch (err) {
-    alert(err.message);
-  } finally {
-    setBusy(false);
-  }
+  requireAdminPin(async () => {
+    setBusy(true);
+    try {
+      const { error } = await sb.from('investment_purchases').update({ approval_status: 'rejected' }).eq('id', id);
+      if (error) throw error;
+      await refreshLotMgmt();
+      toast('Pembelian ditolak');
+    } catch (err) { alert(err.message); }
+    finally { setBusy(false); }
+  });
 };
 
 window.deletePurchase = async function(id) {
-  if (!confirm('Yakin ingin menghapus riwayat pembelian ini secara permanen?')) return;
-  setBusy(true);
-  try {
-    const { error } = await sb.from('investment_purchases').delete().eq('id', id);
-    if (error) throw error;
-    await refreshLotMgmt();
-    toast('Riwayat pembelian dihapus');
-  } catch (err) {
-    alert(err.message);
-  } finally {
-    setBusy(false);
-  }
+  requireAdminPin(async () => {
+    setBusy(true);
+    try {
+      const { error } = await sb.from('investment_purchases').delete().eq('id', id);
+      if (error) throw error;
+      await refreshLotMgmt();
+      toast('Riwayat pembelian dihapus');
+    } catch (err) { alert(err.message); }
+    finally { setBusy(false); }
+  });
 };
 
 window.deleteAllPendingPurchases = async function() {
-  if (!confirm('Yakin ingin menghapus SEMUA riwayat pembelian yang berstatus PENDING atau FAILED secara permanen?')) return;
-  setBusy(true);
-  try {
-    const { error } = await sb.from('investment_purchases').delete().in('payment_status', ['pending', 'failed']);
-    if (error) throw error;
-    await refreshLotMgmt();
-    toast('Semua riwayat pending & gagal telah dibersihkan');
-  } catch (err) {
-    alert(err.message);
-  } finally {
-    setBusy(false);
-  }
+  requireAdminPin(async () => {
+    setBusy(true);
+    try {
+      const { error } = await sb.from('investment_purchases').delete().in('payment_status', ['pending', 'failed']);
+      if (error) throw error;
+      await refreshLotMgmt();
+      toast('Semua riwayat pending & gagal telah dibersihkan');
+    } catch (err) { alert(err.message); }
+    finally { setBusy(false); }
+  });
 };
 
 window.refreshLotMgmt = async function() {
   setBusy(true);
-  await Promise.all([loadCatalog(), loadPurchases()]);
-  render();
-  setBusy(false);
+  try {
+    await Promise.all([loadCatalog(), loadPurchases()]);
+    render();
+  } catch (err) { console.error(err); }
+  finally { setBusy(false); }
+};
+
+window.requireAdminPin = function(callback) {
+  const modal = document.createElement('div');
+  modal.className = 'modal show';
+  modal.style.alignItems = 'center';
+  modal.innerHTML = `<div class="modal-content" style="background:#fff;border:3px solid #000;border-radius:8px;padding:20px;width:90%;max-width:300px;text-align:center;"><h3 style="margin-top:0;font-size:1.2rem;">Konfirmasi PIN</h3><p style="font-size:0.9rem;margin-bottom:16px;">Masukkan PIN Admin untuk konfirmasi tindakan ini.</p><input type="password" pattern="[0-9]*" inputmode="numeric" id="confirmActionPin" class="input" style="text-align:center;letter-spacing:4px;font-weight:bold;margin-bottom:16px;" placeholder="PIN" onkeydown="if(event.key==='Enter') document.getElementById('confirmActionBtn').click()"><div style="display:flex;gap:8px;"><button class="btn" style="flex:1" onclick="this.closest('.modal').remove()">Batal</button><button class="btn err" style="flex:1" id="confirmActionBtn">Konfirmasi</button></div></div>`;
+  document.body.appendChild(modal);
+  const input = modal.querySelector('#confirmActionPin');
+  setTimeout(() => input.focus(), 100);
+  modal.querySelector('#confirmActionBtn').onclick = () => {
+    const adminData = JSON.parse(localStorage.getItem(SESSION_KEY) || '{}');
+    if (String(input.value) === String(adminData.pin || ADMIN_PIN)) {
+      modal.remove(); callback();
+    } else { toast('PIN Salah!', true); input.value = ''; input.focus(); }
+  };
 };
