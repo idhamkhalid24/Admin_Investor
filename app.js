@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // INVESTOR TRACKER - ADMIN PANEL
 // Backend: Supabase (project yang sama dengan aplikasi_admin_only)
 // ============================================================
@@ -688,7 +688,7 @@ function renderDistribution() {
           <div class="row">
             <div>
               <div class="title">${esc(d.investment_batches?.batch_name || '-')}</div>
-              <div class="meta">${esc(d.investment_batches?.investors?.name || '-')} Ãƒâ€šÃ‚Â· Periode ${esc(d.period)}</div>
+              <div class="meta">${esc(d.investment_batches?.investors?.name || '-')} &bull; Periode ${esc(d.period)}</div>
             </div>
             <span class="chip ${d.paid_to_investor ? 'active' : 'closed'}">${d.paid_to_investor ? 'SUDAH CAIR' : 'PENDING'}</span>
           </div>
